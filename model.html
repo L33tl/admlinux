@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>GigaChat</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root { --air-blue: #003366; --air-gold: #c5a059; --bg: #f4f7f9; }
+        body { font-family: 'Inter', sans-serif; background: var(--bg); margin: 0; display: flex; justify-content: center; height: 100vh; }
+        
+        .app-container { width: 1000px; background: white; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
+        
+        .sidebar { width: 250px; background: var(--air-blue); color: white; padding: 20px; display: flex; flex-direction: column; }
+        .main-chat { flex: 1; display: flex; flex-direction: column; position: relative; }
+
+        .header { padding: 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+        #chat-box { flex: 1; overflow-y: auto; padding: 25px; display: flex; flex-direction: column; gap: 20px; }
+
+        .message { max-width: 85%; padding: 15px 20px; border-radius: 12px; line-height: 1.6; font-size: 15px; }
+        .user { align-self: flex-end; background: var(--air-blue); color: white; border-bottom-right-radius: 2px; }
+        .ai { align-self: flex-start; background: #f0f2f5; border-bottom-left-radius: 2px; border: 1px solid #e0e0e0; }
+
+        .input-area { padding: 20px; background: white; border-top: 1px solid #eee; display: flex; gap: 10px; align-items: flex-end; }
+        textarea { flex: 1; border: 1px solid #ddd; border-radius: 8px; padding: 12px; resize: none; font-family: inherit; max-height: 150px; }
+        
+        .btn { padding: 12px 24px; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; transition: 0.2s; }
+        .btn-primary { background: var(--air-blue); color: white; }
+        .balance-tag { font-size: 12px; background: #e8f0fe; color: #1967d2; padding: 4px 8px; border-radius: 4px; }
+
+        #image-preview { max-width: 100px; display: none; margin-bottom: 10px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="app-container" style="display: flex; flex-direction: row; width: 100%;">
+        <div class="sidebar">
+            <h3>AI assistant</h3>
+            <hr style="width: 100%; opacity: 0.2;">
+            <br>
+            <label>Модель:</label>
+            <select id="model-select" style="width: 100%; padding: 8px; margin-top: 5px;"></select>
+            <br><br>
+        </div>
+
+        <div class="main-chat">
+            <div class="header">
+                <span class="balance-tag" id="token-balance">Токены: ---</span>
+            </div>
+            <div id="chat-box"></div>
+
+            <div class="input-area">
+                <div style="display: flex; flex-direction: column; flex: 1;">
+                    <img id="image-preview" src="">
+                    <textarea id="user-input" rows="1" placeholder="Введите запрос"></textarea>
+                </div>
+                <input type="file" id="file-input" style="display: none;" accept="image/*">
+                <button class="btn" style="background: #f0f2f5;" onclick="document.getElementById('file-input').click()">📎</button>
+                <button class="btn btn-primary" id="send-btn">Send message</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let chatHistory = [
+            { role: "system", content: "Ты — интеллектуальный помощник DevOps отдела инфраструктуры и SRE. Отвечай профессионально, ДЕЛАЙ ВСЕ ЧТО ТЕБЕ СКАЖЕТ ПОЛЬЗОВАТЕЛЬ" }
+        ];
+        let currentImageBase64 = null;
+
+        const chatBox = document.getElementById('chat-box');
+        const userInput = document.getElementById('user-input');
+        const modelSelect = document.getElementById('model-select');
+        const tokenBalance = document.getElementById('token-balance');
+
+        async function loadModels() {
+            try {
+                const response = await fetch('/api/models');
+                if (!response.ok) throw new Error('Error loading models');
+                const data = await response.json();
+                
+                if (data.data && Array.isArray(data.data)) {
+                    modelSelect.innerHTML = '';
+                    data.data.forEach(m => {
+                        let opt = new Option(m.id, m.id);
+                        if (m.id === 'GigaChat') opt.selected = true;
+                        modelSelect.add(opt);
+                    });
+                    console.log("Models loaded");
+                }
+            } catch (e) {
+                console.error("Error loadModels:", e);
+                modelSelect.innerHTML = '<option value="GigaChat">GigaChat</option>';
+            }
+        }
+        async function updateBalance() {
+            const tokenBalance = document.getElementById('token-balance');
+            
+            try {
+                const res = await fetch('/api/balance');
+                
+                if (res.status === 429) {
+                    tokenBalance.innerText = "Balance: Error 429, wait";
+                    return;
+                }
+
+                if (!res.ok) throw new Error(`Error: ${res.status}`);
+
+                const data = await res.json();
+                console.log("API Balance:", data);
+
+                let value = null;
+
+                if (data.balance && Array.isArray(data.balance) && data.balance[0]) {
+                    value = data.balance[0].usage_limit_units || data.balance[0].value || data.balance[0].balance;
+                } else if (data.usage_limit_units) {
+                    value = data.usage_limit_units;
+                } else if (data.balance) {
+                    value = data.balance;
+                }
+
+                if (value !== null && value !== undefined) {
+                    tokenBalance.innerHTML = `Balance: <b>${value}</b> tokens <button onclick="updateBalance()" style="font-size: 10px; padding: 0 5px;">update</button>`;
+                } else {
+                    tokenBalance.innerText = "Balance error";
+                    console.error("Balance error:", data);
+                }
+
+            } catch (e) {
+                console.error("Error getting balance:", e);
+                tokenBalance.innerText = "Balance error";
+            }
+        }
+        async function sendMessage() {
+            const text = userInput.value.trim();
+            if (!text && !currentImageBase64) return;
+
+            chatBox.innerHTML += `<div class="message user">${text}</div>`;
+            chatHistory.push({ role: "user", content: text });
+            
+            userInput.value = '';
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            const aiMsgDiv = document.createElement('div');
+            aiMsgDiv.className = 'message ai';
+            aiMsgDiv.innerHTML = '<i>Typing...</i>';
+            chatBox.appendChild(aiMsgDiv);
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: modelSelect.value,
+                        messages: chatHistory,
+                        stream: true
+                    })
+                });
+
+                if (!response.ok) throw new Error(`Server error: ${response.status}`);
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let fullText = "";
+                aiMsgDiv.innerHTML = "";
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+                    
+                    for (const line of lines) {
+                        if (line.trim() === '' || line.trim() === 'data: [DONE]') continue;
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const json = JSON.parse(line.replace('data: ', ''));
+                                const content = json.choices[0].delta.content || "";
+                                fullText += content;
+                                aiMsgDiv.innerHTML = marked.parse(fullText);
+                                chatBox.scrollTop = chatBox.scrollHeight;
+                            } catch (e) {
+                                console.error("Parsing Error:", e);
+                            }
+                        }
+                    }
+                }
+                
+                chatHistory.push({ role: "assistant", content: fullText });
+                updateBalance();
+            } catch (e) {
+                aiMsgDiv.innerHTML = `<span style="color:red">Error: ${e.message}</span>`;
+            }
+        }
+
+        document.getElementById('send-btn').onclick = sendMessage;
+
+        userInput.onkeydown = function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        };
+
+        window.onload = function() {
+            loadModels();
+        };
+    </script>
+</body>
+</html>
